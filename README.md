@@ -3,6 +3,8 @@
 
 ![image](https://github.com/user-attachments/assets/dbef477d-6bf1-4f04-ae67-e5d35226b4d4)
 
+![image](https://github.com/user-attachments/assets/52a08282-ffe7-4a79-aa2f-8b3cfaccc16d)
+
 
 # Kullanım Talimatları
 Bu scripti bir .ps1 dosyası olarak kaydedin (örneğin WampVirtualHost.ps1)
