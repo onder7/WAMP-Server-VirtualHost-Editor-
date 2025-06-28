@@ -87,8 +87,72 @@ Farklı WAMP/Apache versiyonlarında $httpdConf ve $httpdVhosts yollarını gün
 Scriptin çalışması için PowerShell Execution Policy'nin RemoteSigned veya Unrestricted olması gerekebilir.
 
 
+# Olası Sorunlar:
 
+cannot be loaded because running scripts is disabled on this 
+system. For more information, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170.
+    + CategoryInfo          : SecurityError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : UnauthorizedAccess
+Bu hata PowerShell'in güvenlik politikası nedeniyle oluşuyor. İşte çözüm yolları:
 
+## Çözüm 1: Execution Policy'yi Geçici Olarak Değiştir
+
+**PowerShell'i yönetici olarak aç** ve şu komutu çalıştır:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+Sonra scriptini çalıştır:
+```powershell
+D:\py\host\VirtualHost\WampVirtualHost.ps1
+```
+
+## Çözüm 2: Tek Seferlik Bypass (Önerilen)
+
+PowerShell'i yönetici olarak açıp şu komutla çalıştır:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\py\host\VirtualHost\WampVirtualHost.ps1"
+```
+
+## Çözüm 3: Mevcut Durumu Kontrol Et
+
+Önce mevcut policy'yi kontrol et:
+```powershell
+Get-ExecutionPolicy -List
+```
+
+## Çözüm 4: Sadece Bu Script İçin İzin Ver
+
+Script dosyasının engelini kaldır:
+```powershell
+Unblock-File -Path "D:\py\host\VirtualHost\WampVirtualHost.ps1"
+```
+
+## Güvenlik Seviyeleri:
+
+- **Restricted**: Hiçbir script çalışmaz (varsayılan)
+- **RemoteSigned**: Yerel scriptler çalışır, uzaktan indirilenler imzalı olmalı
+- **Unrestricted**: Tüm scriptler çalışır (önerilmez)
+
+## En Güvenli Yöntem:
+
+1. **PowerShell ISE** veya **Visual Studio Code** kullan
+2. Script içeriğini kopyala-yapıştır
+3. F5 ile çalıştır
+
+## Kalıcı Çözüm (Dikkatli Kullan):
+
+```powershell
+# Sadece mevcut kullanıcı için
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Tüm sistem için (önerilmez)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine
+```
+
+**Not:** Güvenlik nedeniyle **Çözüm 2** (Bypass) veya **Çözüm 4** (Unblock) öneriliyor. Bu şekilde sistem geneli güvenlik ayarlarını değiştirmeden sadece bu script çalışabilir.
 
 
 
