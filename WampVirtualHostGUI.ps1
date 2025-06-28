@@ -1,10 +1,43 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# WAMP Server yapılandırma dosyaları (Apache versiyonunuza göre güncelleyin)
-$httpdConf = "C:\wamp64\bin\apache\apache2.4.62.1\conf\httpd.conf"
-$httpdVhosts = "C:\wamp64\bin\apache\apache2.4.62.1\conf\extra\httpd-vhosts.conf"
-$hostsFile = "C:\Windows\System32\drivers\etc\hosts"
+# Yönetici kontrolü fonksiyonu
+function Test-Administrator {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# WAMP yollarını dinamik olarak bul
+function Get-WampPaths {
+    $wampBase = "C:\wamp64"
+    if (-not (Test-Path $wampBase)) {
+        throw "WAMP64 bulunamadı: $wampBase"
+    }
+    
+
+
+    
+    return @{
+        HttpdConf = "$wampBase\bin\apache\apache2.4.62.1\conf\httpd.conf"
+        HttpdVhosts = "$wampBase\bin\apache\apache2.4.62.1\conf\extra\httpd-vhosts.conf"
+        HostsFile = "C:\Windows\System32\drivers\etc\hosts"
+        WwwRoot = "$wampBase\www"
+    }
+}
+
+# Yolları al ve kontrol et
+try {
+    $paths = Get-WampPaths
+    foreach ($path in $paths.Values) {
+        if (-not (Test-Path $path -PathType Leaf) -and $path -notmatch "www$") {
+            throw "Dosya bulunamadı: $path"
+        }
+    }
+} catch {
+    [System.Windows.Forms.MessageBox]::Show("WAMP yapılandırması bulunamadı:`n$_", "Hata", "OK", "Error")
+    exit
+}
 
 # Ana form oluştur
 $form = New-Object System.Windows.Forms.Form
@@ -62,22 +95,58 @@ $btnAdd.Text = "VirtualHost Ekle"
 $btnAdd.Location = New-Object System.Drawing.Point(130,90)
 $btnAdd.Size = New-Object System.Drawing.Size(120,30)
 $btnAdd.Add_Click({
+    if (-not (Test-Administrator)) {
+        [System.Windows.Forms.MessageBox]::Show("Bu işlem için yönetici yetkisi gerekli!", "Yetki Hatası", "OK", "Error")
+        return
+    }
+    
     if (-not $txtDomain.Text -or -not $txtFolder.Text) {
         [System.Windows.Forms.MessageBox]::Show("Lütfen tüm alanları doldurun!", "Uyarı", "OK", "Warning")
         return
     }
     
-    $domain = $txtDomain.Text
-    $projectPath = "C:\wamp64\www\" + $txtFolder.Text
+    # Domain adı doğrulaması
+    if ($txtDomain.Text -notmatch '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$' -and $txtDomain.Text -notmatch '^[a-zA-Z0-9.-]+\.local$') {
+        [System.Windows.Forms.MessageBox]::Show("Geçerli bir domain adı girin (örn: test.local)", "Geçersiz Domain", "OK", "Warning")
+        return
+    }
+    
+    $domain = $txtDomain.Text.Trim()
+    $folderName = $txtFolder.Text.Trim()
+    $projectPath = Join-Path $paths.WwwRoot $folderName
     
     try {
+        # Mevcut domain kontrolü
+        $existingHosts = Get-Content $paths.HostsFile -ErrorAction SilentlyContinue
+        if ($existingHosts -and ($existingHosts | Where-Object { $_ -match "127\.0\.0\.1\s+$domain" })) {
+            [System.Windows.Forms.MessageBox]::Show("Bu domain zaten mevcut!", "Domain Çakışması", "OK", "Warning")
+            return
+        }
+        
         # Proje dizini oluştur
         if (-not (Test-Path $projectPath)) {
-            New-Item -ItemType Directory -Path $projectPath | Out-Null
+            New-Item -ItemType Directory -Path $projectPath -Force | Out-Null
         }
+        
+        # Basit index.html oluştur
+        $indexHtml = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>$domain</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <h1>$domain Çalışıyor!</h1>
+    <p>VirtualHost başarıyla kuruldu.</p>
+</body>
+</html>
+"@
+        Set-Content -Path (Join-Path $projectPath "index.html") -Value $indexHtml -Encoding UTF8
         
         # httpd-vhosts.conf dosyasına ekleme yap
         $vhostConfig = @"
+
 <VirtualHost *:80>
     ServerName $domain
     DocumentRoot "$projectPath"
@@ -86,21 +155,32 @@ $btnAdd.Add_Click({
         AllowOverride All
         Require all granted
     </Directory>
+    ErrorLog "logs/$($domain)_error.log"
+    CustomLog "logs/$($domain)_access.log" common
 </VirtualHost>
-
 "@
-        Add-Content -Path $httpdVhosts -Value $vhostConfig
+        Add-Content -Path $paths.HttpdVhosts -Value $vhostConfig -Encoding UTF8
         
         # hosts dosyasına ekleme yap
-        Add-Content -Path $hostsFile -Value "127.0.0.1 $domain" -Force
+        Add-Content -Path $paths.HostsFile -Value "`n127.0.0.1`t$domain" -Encoding ASCII
         
         # httpd.conf'da vhosts dosyasının include edildiğinden emin ol
-        $includeCheck = Get-Content $httpdConf | Select-String "httpd-vhosts.conf"
-        if (-not $includeCheck) {
-            Add-Content -Path $httpdConf -Value "Include conf/extra/httpd-vhosts.conf"
+        $httpdContent = Get-Content $paths.HttpdConf
+        $includePattern = "Include conf/extra/httpd-vhosts.conf"
+        $hasActiveInclude = $httpdContent | Where-Object { $_ -eq $includePattern -and $_ -notmatch '^\s*#' }
+        
+        if (-not $hasActiveInclude) {
+            # Eğer commented include varsa aktif et
+            $commentedInclude = $httpdContent | Where-Object { $_ -match '^\s*#.*httpd-vhosts\.conf' }
+            if ($commentedInclude) {
+                $newContent = $httpdContent -replace '^\s*#(.*)httpd-vhosts\.conf', '$1httpd-vhosts.conf'
+                Set-Content -Path $paths.HttpdConf -Value $newContent -Encoding UTF8
+            } else {
+                Add-Content -Path $paths.HttpdConf -Value "`n$includePattern" -Encoding UTF8
+            }
         }
         
-        [System.Windows.Forms.MessageBox]::Show("VirtualHost başarıyla eklendi!`nWAMP Server'ı yeniden başlatın.", "Başarılı", "OK", "Information")
+        [System.Windows.Forms.MessageBox]::Show("VirtualHost başarıyla eklendi!`n`nDomain: $domain`nDizin: $projectPath`n`nWAMP Server'ı yeniden başlatın.", "Başarılı", "OK", "Information")
         $txtDomain.Text = ""
         $txtFolder.Text = ""
         
@@ -108,7 +188,7 @@ $btnAdd.Add_Click({
         Update-HostList
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Hata oluştu: $_`nYönetici olarak çalıştırdığınızdan emin olun.", "Hata", "OK", "Error")
+        [System.Windows.Forms.MessageBox]::Show("Hata oluştu: $($_.Exception.Message)", "Hata", "OK", "Error")
     }
 })
 $tabAdd.Controls.Add($btnAdd)
@@ -126,7 +206,7 @@ $listView.View = "Details"
 $listView.FullRowSelect = $true
 $listView.GridLines = $true
 $listView.Columns.Add("Domain", 200) | Out-Null
-$listView.Columns.Add("Dizin", 400) | Out-Null
+$listView.Columns.Add("Dizin", 340) | Out-Null
 $tabList.Controls.Add($listView)
 
 # Yenile butonu
@@ -145,6 +225,11 @@ $btnRemove.Text = "Seçileni Kaldır"
 $btnRemove.Location = New-Object System.Drawing.Point(150,380)
 $btnRemove.Size = New-Object System.Drawing.Size(120,30)
 $btnRemove.Add_Click({
+    if (-not (Test-Administrator)) {
+        [System.Windows.Forms.MessageBox]::Show("Bu işlem için yönetici yetkisi gerekli!", "Yetki Hatası", "OK", "Error")
+        return
+    }
+    
     if ($listView.SelectedItems.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show("Lütfen kaldırmak için bir VirtualHost seçin!", "Uyarı", "OK", "Warning")
         return
@@ -155,83 +240,113 @@ $btnRemove.Add_Click({
     $result = [System.Windows.Forms.MessageBox]::Show("'$selectedDomain' VirtualHost'unu kaldırmak istediğinize emin misiniz?", "Onay", "YesNo", "Question")
     if ($result -eq "Yes") {
         try {
-            $content = Get-Content $httpdVhosts
-            $newContent = @()
-            $inVhost = $false
-            $removed = $false
-            
-            for ($i = 0; $i -lt $content.Count; $i++) {
-                if ($content[$i] -match "<VirtualHost \*:80>") {
-                    $blockStart = $i
-                    $serverName = $null
-                    $inVhost = $true
-                }
-                
-                if ($inVhost -and $content[$i] -match "ServerName $selectedDomain") {
-                    $serverName = $selectedDomain
-                }
-                
-                if ($inVhost -and $content[$i] -match "</VirtualHost>") {
-                    $inVhost = $false
-                    if ($serverName -ne $selectedDomain) {
-                        $newContent += $content[$blockStart..$i]
-                    }
-                    else {
-                        $removed = $true
-                    }
-                }
-                
-                if (-not $inVhost -and $content[$i] -notmatch "<VirtualHost \*:80>" -and $content[$i] -notmatch "</VirtualHost>") {
-                    $newContent += $content[$i]
-                }
-            }
-            
-            if ($removed) {
-                Set-Content -Path $httpdVhosts -Value $newContent
-                
-                # hosts dosyasından da kaldır
-                $hostsContent = Get-Content $hostsFile
-                $newHostsContent = $hostsContent | Where-Object { $_ -notmatch "127.0.0.1 $selectedDomain" }
-                Set-Content -Path $hostsFile -Value $newHostsContent -Force
-                
-                [System.Windows.Forms.MessageBox]::Show("VirtualHost kaldırıldı!`nWAMP Server'ı yeniden başlatın.", "Başarılı", "OK", "Information")
-                Update-HostList
-            }
+            Remove-VirtualHost -Domain $selectedDomain
+            [System.Windows.Forms.MessageBox]::Show("VirtualHost kaldırıldı!`nWAMP Server'ı yeniden başlatın.", "Başarılı", "OK", "Information")
+            Update-HostList
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show("Hata oluştu: $_`nYönetici olarak çalıştırdığınızdan emin olun.", "Hata", "OK", "Error")
+            [System.Windows.Forms.MessageBox]::Show("Hata oluştu: $($_.Exception.Message)", "Hata", "OK", "Error")
         }
     }
 })
 $tabList.Controls.Add($btnRemove)
 
 # Durum bilgisi
+$isAdmin = Test-Administrator
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Text = "Yönetici olarak çalıştırıldı: $([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem)"
+$lblStatus.Text = "Yönetici olarak çalıştırıldı: $isAdmin"
 $lblStatus.Location = New-Object System.Drawing.Point(20,420)
 $lblStatus.Size = New-Object System.Drawing.Size(300,20)
-$lblStatus.ForeColor = if ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) { [System.Drawing.Color]::Green } else { [System.Drawing.Color]::Red }
+$lblStatus.ForeColor = if ($isAdmin) { [System.Drawing.Color]::Green } else { [System.Drawing.Color]::Red }
 $tabList.Controls.Add($lblStatus)
+
+# VirtualHost kaldırma fonksiyonu
+function Remove-VirtualHost {
+    param([string]$Domain)
+    
+    # VirtualHost konfigürasyonunu kaldır
+    $content = Get-Content $paths.HttpdVhosts
+    $newContent = @()
+    $i = 0
+    
+    while ($i -lt $content.Length) {
+        if ($content[$i] -match '<VirtualHost \*:80>') {
+            $vhostStart = $i
+            $vhostContent = @($content[$i])
+            $i++
+            
+            # VirtualHost bloğunu tamamen oku
+            while ($i -lt $content.Length -and $content[$i] -notmatch '</VirtualHost>') {
+                $vhostContent += $content[$i]
+                $i++
+            }
+            
+            if ($i -lt $content.Length) {
+                $vhostContent += $content[$i] # </VirtualHost> satırını ekle
+            }
+            
+            # Bu VirtualHost'un ServerName'ini kontrol et
+            $serverNameLine = $vhostContent | Where-Object { $_ -match "ServerName\s+$Domain" }
+            
+            if (-not $serverNameLine) {
+                # Bu bizim aradığımız domain değil, koru
+                $newContent += $vhostContent
+            }
+        } else {
+            $newContent += $content[$i]
+        }
+        $i++
+    }
+    
+    Set-Content -Path $paths.HttpdVhosts -Value $newContent -Encoding UTF8
+    
+    # hosts dosyasından kaldır
+    $hostsContent = Get-Content $paths.HostsFile
+    $newHostsContent = $hostsContent | Where-Object { $_ -notmatch "127\.0\.0\.1\s+$Domain" }
+    Set-Content -Path $paths.HostsFile -Value $newHostsContent -Encoding ASCII
+}
 
 # VirtualHost listesini güncelleme fonksiyonu
 function Update-HostList {
     $listView.Items.Clear()
     
     try {
-        $vhosts = Select-String -Path $httpdVhosts -Pattern "<VirtualHost \*:80>" -Context 0,10
-        if ($vhosts) {
-            foreach ($vhost in $vhosts) {
-                $serverName = ($vhost.Context.PostContext | Select-String "ServerName (\S+)").Matches.Groups[1].Value
-                $docRoot = ($vhost.Context.PostContext | Select-String 'DocumentRoot "(.+?)"').Matches.Groups[1].Value
+        if (-not (Test-Path $paths.HttpdVhosts)) {
+            return
+        }
+        
+        $content = Get-Content $paths.HttpdVhosts
+        $i = 0
+        
+        while ($i -lt $content.Length) {
+            if ($content[$i] -match '<VirtualHost \*:80>') {
+                $vhostContent = @()
+                $i++
                 
-                $item = New-Object System.Windows.Forms.ListViewItem($serverName)
-                $item.SubItems.Add($docRoot) | Out-Null
-                $listView.Items.Add($item)
+                # VirtualHost içeriğini oku
+                while ($i -lt $content.Length -and $content[$i] -notmatch '</VirtualHost>') {
+                    $vhostContent += $content[$i]
+                    $i++
+                }
+                
+                # ServerName ve DocumentRoot'u bul
+                $serverName = ($vhostContent | Where-Object { $_ -match 'ServerName\s+(.+)' } | Select-Object -First 1)
+                $docRoot = ($vhostContent | Where-Object { $_ -match 'DocumentRoot\s+"(.+?)"' } | Select-Object -First 1)
+                
+                if ($serverName -and $docRoot) {
+                    $serverName = [regex]::Match($serverName, 'ServerName\s+(.+)').Groups[1].Value.Trim()
+                    $docRoot = [regex]::Match($docRoot, 'DocumentRoot\s+"(.+?)"').Groups[1].Value.Trim()
+                    
+                    $item = New-Object System.Windows.Forms.ListViewItem($serverName)
+                    $item.SubItems.Add($docRoot) | Out-Null
+                    $listView.Items.Add($item) | Out-Null
+                }
             }
+            $i++
         }
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("VirtualHost listesi alınırken hata oluştu: $_", "Hata", "OK", "Error")
+        [System.Windows.Forms.MessageBox]::Show("VirtualHost listesi alınırken hata oluştu: $($_.Exception.Message)", "Hata", "OK", "Error")
     }
 }
 
