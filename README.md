@@ -37,20 +37,20 @@ Farklı WAMP/Apache versiyonlarında $httpdConf ve $httpdVhosts yollarını gün
 
 Scriptin çalışması için PowerShell Execution Policy'nin RemoteSigned veya Unrestricted olması gerekebilir.
 
-######## WampVHostGUI.ps1 ############
+### WampVHostGUI.ps1 
 
 ![image](https://github.com/user-attachments/assets/ddc907fa-e8fb-4ff2-bf84-476a8fcf3ec7)
 
 ![image](https://github.com/user-attachments/assets/f0c802ee-6c6a-4033-ac0a-1cbb0540cf26)
 
-Kullanım Talimatları
+## Kullanım Talimatları
 Bu kodu bir .ps1 dosyasına kaydedin (örneğin WampVHostGUI.ps1)
 
 PowerShell'i yönetici olarak çalıştırın (hosts dosyasını değiştirmek için gerekli)
 
 Scripti çalıştırın: .\WampVHostGUI.ps1
 
-GUI Özellikleri
+## GUI Özellikleri
 Yeni VirtualHost Ekleme Sekmesi:
 
 Domain adı ve proje klasörü girebileceğiniz form
@@ -59,7 +59,7 @@ Tek butonla tüm yapılandırmaları otomatik yapar
 
 www dizini içinde otomatik klasör oluşturur
 
-VirtualHost Listesi Sekmesi:
+## VirtualHost Listesi Sekmesi:
 
 Mevcut tüm VirtualHost'ları tablo şeklinde gösterir
 
@@ -67,11 +67,11 @@ Seçili VirtualHost'u kaldırma imkanı
 
 Listeyi yenileme butonu
 
-Yönetici Durum Göstergesi:
+## Yönetici Durum Göstergesi:
 
 Scriptin yönetici yetkileriyle çalışıp çalışmadığını gösterir
 
-Önemli Notlar
+## Önemli Notlar
 Apache versiyonunuza göre $httpdConf ve $httpdVhosts yollarını güncellemelisiniz.
 
 Scriptin düzgün çalışması için PowerShell Execution Policy ayarlarını kontrol edin:
